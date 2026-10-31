@@ -1,9 +1,7 @@
 /* PROJETO GROW - ESP32 classico / WROOM + Wi-Fi, CSV, TelnetStream e ArduinoOTA
    Mantenha GrowRede.h e GrowRegistro.h na mesma pasta deste .ino.
    Bibliotecas: HX711 por Bogdan Necula; WiFiManager por tzapu; TelnetStream por jandrassy; ArduinoOTA (nativa do ESP32).
-   Historico para relatorio/servidor: 10 s (bomba desligada) / 1 s (bomba ligada).
-   Monitor Serial (USB): logs continuos a cada 500 ms.
-   Telnet (PuTTY): interface limpa para comandos. Digite 'm' se desejar ativar o log continuo no PuTTY.
+   Build 2.0.2: Estrutura original mantida com validação de peso + umidade < 30%.
 */
 #include <Arduino.h>
 #include <driver/gpio.h>
@@ -41,26 +39,33 @@ Ajustes ajustes={ASSINATURA,VERSAO,0.0f,0,0.0f,0};
 bool modoPlotter=false;
 bool telnetIniciado=false;
 bool otaIniciado=false;
-bool telnetLogContinuo=false; // Por padrao, desativado no Telnet para nao poluir o PuTTY
+bool telnetLogContinuo=false; // Desativado por padrao no Telnet para manter o PuTTY limpo
 
 #define INFO_PRINTF(...) do { \
   if (!modoPlotter) { \
     Serial.printf(__VA_ARGS__); \
-    if (telnetIniciado && WiFi.status() == WL_CONNECTED) TelnetStream.printf(__VA_ARGS__); \
+    if (telnetIniciado && WiFi.status() == WL_CONNECTED) { \
+      TelnetStream.printf(__VA_ARGS__); \
+    } \
   } \
 } while (0)
 
 #define INFO_PRINTLN(...) do { \
   if (!modoPlotter) { \
     Serial.println(__VA_ARGS__); \
-    if (telnetIniciado && WiFi.status() == WL_CONNECTED) TelnetStream.println(__VA_ARGS__); \
+    if (telnetIniciado && WiFi.status() == WL_CONNECTED) { \
+      TelnetStream.print(__VA_ARGS__); \
+      TelnetStream.print("\r\n"); \
+    } \
   } \
 } while (0)
 
 #define INFO_PRINT(...) do { \
   if (!modoPlotter) { \
     Serial.print(__VA_ARGS__); \
-    if (telnetIniciado && WiFi.status() == WL_CONNECTED) TelnetStream.print(__VA_ARGS__); \
+    if (telnetIniciado && WiFi.status() == WL_CONNECTED) { \
+      TelnetStream.print(__VA_ARGS__); \
+    } \
   } \
 } while (0)
 
@@ -74,7 +79,7 @@ long pesos[5]={};
 uint8_t posPeso=0, nPeso=0;
 uint32_t umidades[25]={}, somaMv=0;
 uint8_t posAdc=0, nAdc=0;
-unsigned long ultimoPeso=0, ultimoAdc=0, ultimoLog=0, ultimoRegistro=0;
+unsigned long ultimoPeso=0, ultimoAdc=0, ultimoLog=0, ultimoRegistro=0, ultimoAvisoConfirmacao=0;
 
 char entrada=0, coleta=0;
 char numero[40];
@@ -126,7 +131,7 @@ void desligar(const char *razao) {
 }
 void bloquear(const char *razao) {
   desligar(razao);
-  if (!bloqueado) INFO_PRINTF("EVENTO: bomba BLOQUEADA: %s\n",razao);
+  if (!bloqueado) INFO_PRINTF("EVENTO: bomba BLOQUEADA: %s\r\n",razao);
   bloqueado=true;
   aguardandoConfirmacao = false;
   entrada=coleta=0;
@@ -146,11 +151,11 @@ bool salvarAjustes(Ajustes v) {
   return true;
 }
 void mostrarAjustes() {
-  INFO_PRINTF("CONFIG: calibrada=%s | fator=%.8f | tara=%ld | dose=%.1f g\n",
+  INFO_PRINTF("CONFIG: calibrada=%s | fator=%.8f | tara=%ld | dose=%.1f g\r\n",
     calibrada()?"SIM":"NAO",ajustes.fator,static_cast<long>(ajustes.tara),ajustes.doseG);
 }
 void ajuda() {
-  INFO_PRINTLN("\nGROW: inicia umidade <30%; para por peso inicial+dose ou umidade >=85%.");
+  INFO_PRINTLN("\r\nGROW: inicia umidade <30%; para por peso inicial+dose ou umidade >=85%.");
   INFO_PRINTLN("Primeira vez: t vazio; c 1500 + Enter com 1500 g; d 500 + Enter para dose +500 g.");
   INFO_PRINTLN("Salva automaticamente. Reinicios recuperam calibracao, tara e dose.");
   INFO_PRINTLN("w: configurar Wi-Fi/servidor | n: estado da rede e memoria | f: inicializar arquivos");
@@ -158,10 +163,10 @@ void ajuda() {
 }
 
 void mostrarRede() {
-  INFO_PRINTF("REDE: dispositivo=%s | Wi-Fi=%s | Portal=%s | HTTP=%d\n",
+  INFO_PRINTF("REDE: dispositivo=%s | Wi-Fi=%s | Portal=%s | HTTP=%d\r\n",
     growDispositivo,growWifi.load()?"CONECTADO":"DESCONECTADO",
     growPortal.load()?"ABERTO (192.168.4.1)":"FECHADO",growHttp.load());
-  INFO_PRINTF("HISTORICO: %s | pendentes=%lu | limite=%.0f KiB | livres=%.0f KiB | perdas neste boot=%lu\n",
+  INFO_PRINTF("HISTORICO: %s | pendentes=%lu | limite=%.0f KiB | livres=%.0f KiB | perdas neste boot=%lu\r\n",
     growEstadoDisco(),static_cast<unsigned long>(growPendentes.load()),
     growCapacidade.load()/1024.0,growBytesLivres.load()/1024.0,
     static_cast<unsigned long>(growPerdidos.load()));
@@ -182,10 +187,10 @@ void verificarServicosRede() {
         INFO_PRINTLN("OTA: Inicio de atualizacao sem fio...");
       });
       ArduinoOTA.onEnd([]() {
-        INFO_PRINTLN("\nOTA: Atualizacao concluida com sucesso!");
+        INFO_PRINTLN("\r\nOTA: Atualizacao concluida com sucesso!");
       });
       ArduinoOTA.onError([](ota_error_t error) {
-        INFO_PRINTF("OTA Erro [%u]\n", error);
+        INFO_PRINTF("OTA Erro [%u]\r\n", error);
       });
       ArduinoOTA.begin();
       otaIniciado = true;
@@ -260,7 +265,7 @@ void aplicarNumero() {
     Ajustes novo=ajustes; novo.doseG=static_cast<float>(valor);
     if (!salvarAjustes(novo)) return;
     entrada=0; motivo="PRONTO";
-    INFO_PRINTF("EVENTO: dose definida em +%.1f g para a proxima rega.\n",ajustes.doseG);
+    INFO_PRINTF("EVENTO: dose definida em +%.1f g para a proxima rega.\r\n",ajustes.doseG);
   }
 }
 
@@ -271,7 +276,6 @@ void atenderSerial() {
   while (temSerial || temTelnet) {
     char c = temSerial ? Serial.read() : TelnetStream.read();
     
-    // Ignora caracteres invisiveis do protocolo Telnet/IAC (<32 ou >126, exceto \r e \n)
     if ((static_cast<unsigned char>(c) < 32 || static_cast<unsigned char>(c) > 126) && c != '\r' && c != '\n') {
       temSerial = Serial.available() > 0;
       temTelnet = telnetIniciado && (WiFi.status() == WL_CONNECTED) && (TelnetStream.available() > 0);
@@ -286,10 +290,13 @@ void atenderSerial() {
         pesoAlvoG = pesoInicioG + ajustes.doseG;
         motivo = "IRRIGANDO";
         rele(true);
-        INFO_PRINTF("EVENTO: rega AUTORIZADA e iniciada | base=%.1f g | dose=%.1f g | alvo=%.1f g\n",pesoInicioG,ajustes.doseG,pesoAlvoG);
+        INFO_PRINTF("EVENTO: rega AUTORIZADA e iniciada | base=%.1f g | dose=%.1f g | alvo=%.1f g\r\n",pesoInicioG,ajustes.doseG,pesoAlvoG);
       } else if (c == 'n' || c == 'N') {
         aguardandoConfirmacao = false;
         INFO_PRINTLN("EVENTO: rega NEGADA pelo usuario. O sistema perguntara novamente no proximo ciclo de leitura.");
+      } else if (c != '\r' && c != '\n') {
+        INFO_PRINTF("ALERTA: Solo seco (%.1f%%). Rega PENDENTE de confirmacao!\r\n", umidadeRelativa());
+        INFO_PRINTLN("Envie 'Y' para autorizar a rega ou 'N' para cancelar.");
       }
       continue;
     }
@@ -336,7 +343,7 @@ void atenderSerial() {
       case 'g': modoPlotter=true; break;
       case 'm': 
         telnetLogContinuo = !telnetLogContinuo;
-        INFO_PRINTF("EVENTO: Logs continuos de 500ms no Telnet %s.\n", telnetLogContinuo ? "ATIVADOS" : "DESATIVADOS");
+        INFO_PRINTF("EVENTO: Logs continuos no Telnet %s.\r\n", telnetLogContinuo ? "ATIVADOS" : "DESATIVADOS");
         break;
       case 'p': mostrarAjustes(); break;
       case 'h': ajuda(); break;
@@ -377,17 +384,27 @@ void controlarRega() {
       desligar(u>=UMIDADE_PARAR ? "UMIDADE_85" : "PESO_ALVO");
       rearmado=false;
       pesoPosRegaG = peso;
-      INFO_PRINTF("EVENTO: rega concluida por %s | peso=%.1f g | umidade=%.1f%%\n",motivo,peso,u);
+      INFO_PRINTF("EVENTO: rega concluida por %s | peso=%.1f g | umidade=%.1f%%\r\n",motivo,peso,u);
     }
   } else {
-    if (u>=UMIDADE_INICIAR) rearmado=true;
-    if (rearmado && u<UMIDADE_INICIAR) {
+    // REARME COM UMIDADE < 30%
+    if (u < UMIDADE_INICIAR) rearmado=true;
+    
+    if (rearmado && u < UMIDADE_INICIAR) {
+      // VALIDAÇÃO DE PESO INTEGRALMENTE MANTIDA
       if (pesoPosRegaG == 0.0 || peso <= pesoPosRegaG - (ajustes.doseG * 0.90)) {
         if (!aguardandoConfirmacao) {
           aguardandoConfirmacao = true;
           motivo="AGUARDANDO_CONFIRMACAO";
-          INFO_PRINTF("ALERTA: Solo seco (%.1f%%). A rega e necessaria.\n", u);
+          ultimoAvisoConfirmacao = millis();
+          INFO_PRINTF("ALERTA: Solo seco (%.1f%%). A rega e necessaria.\r\n", u);
           INFO_PRINTLN("Deseja iniciar a rega agora? Envie 'Y' para confirmar ou 'N' para cancelar.");
+        } else {
+          if (millis() - ultimoAvisoConfirmacao >= 5000) {
+            ultimoAvisoConfirmacao = millis();
+            INFO_PRINTF("ALERTA: Solo seco (%.1f%%). Rega PENDENTE de autorizacao!\r\n", u);
+            INFO_PRINTLN("Envie 'Y' para confirmar a rega ou 'N' para cancelar.");
+          }
         }
       } else {
         if (!aguardandoConfirmacao) motivo="AGUARDA_QUEDA_PESO";
@@ -409,22 +426,6 @@ void logSerial() {
   if (millis()-ultimoLog < LOG_MS) return;
   ultimoLog=millis();
 
-  auto telnetPrint = [](const char* txt) {
-    if (telnetIniciado && WiFi.status() == WL_CONNECTED && telnetLogContinuo) {
-      TelnetStream.print(txt);
-    }
-  };
-  auto telnetPrintf = [](const char* fmt, ...) {
-    if (telnetIniciado && WiFi.status() == WL_CONNECTED && telnetLogContinuo) {
-      va_list args;
-      va_start(args, fmt);
-      char buf[256];
-      vsnprintf(buf, sizeof(buf), fmt, args);
-      va_end(args);
-      TelnetStream.print(buf);
-    }
-  };
-
   if (modoPlotter) {
     if (pesoDisponivel() && adcDisponivel() && tensaoMv()>=300 && tensaoMv()<=2800) {
       Serial.print("Peso_g:"); Serial.print(pesoAtualG(),1);
@@ -433,54 +434,24 @@ void logSerial() {
     return;
   }
 
-  // Serial fisica (USB) recebe sempre os logs
-  Serial.printf("[%.1f s] Peso: ",millis()/1000.0);
-  telnetPrintf("[%.1f s] Peso: ",millis()/1000.0);
+  char buf[256];
+  char strPeso[16], strUmid[32];
+  
+  if (pesoDisponivel()) snprintf(strPeso, sizeof(strPeso), "%.1fg", pesoAtualG());
+  else strcpy(strPeso, "INDISP");
 
-  if (pesoDisponivel()) {
-    Serial.printf("%.1f g",pesoAtualG());
-    telnetPrintf("%.1f g",pesoAtualG());
-  } else {
-    Serial.print("INDISPONIVEL");
-    telnetPrint("INDISPONIVEL");
+  if (adcDisponivel()) snprintf(strUmid, sizeof(strUmid), "%.1f%%(%.2fV)", umidadeRelativa(), tensaoMv()/1000.0f);
+  else strcpy(strUmid, "INDISP");
+
+  snprintf(buf, sizeof(buf),
+    "[%.1fs] P:%s | U:%s | Bomba:%s | St:%s | Wi-Fi:%s\r\n",
+    millis()/1000.0, strPeso, strUmid, bombaLigada?"ON":"OFF", motivo, growWifi.load()?"OK":"OFF");
+
+  Serial.print(buf);
+
+  if (telnetIniciado && WiFi.status() == WL_CONNECTED && telnetLogContinuo) {
+    TelnetStream.print(buf);
   }
-
-  if (adcDisponivel()) {
-    Serial.printf(" | Umidade: %.1f %% | GPIO34: %.3f V",umidadeRelativa(),tensaoMv()/1000.0f);
-    telnetPrintf(" | Umidade: %.1f %% | GPIO34: %.3f V",umidadeRelativa(),tensaoMv()/1000.0f);
-  } else {
-    Serial.print(" | Umidade: INDISPONIVEL | GPIO34: INDISPONIVEL");
-    telnetPrint(" | Umidade: INDISPONIVEL | GPIO34: INDISPONIVEL");
-  }
-
-  Serial.printf(" | Bomba: %s | Estado: %s",bombaLigada?"LIGADA":"DESLIGADA",motivo);
-  telnetPrintf(" | Bomba: %s | Estado: %s",bombaLigada?"LIGADA":"DESLIGADA",motivo);
-
-  if (bombaLigada) {
-    Serial.printf(" | Base: %.1f g | Alvo: %.1f g",pesoInicioG,pesoAlvoG);
-    telnetPrintf(" | Base: %.1f g | Alvo: %.1f g",pesoInicioG,pesoAlvoG);
-  }
-
-  if (bloqueado) {
-    Serial.print(" | BLOQUEADO (a retoma)");
-    telnetPrint(" | BLOQUEADO (a retoma)");
-  } else if (!calibrada()) {
-    Serial.print(" | FALTA CALIBRAR");
-    telnetPrint(" | FALTA CALIBRAR");
-  } else if (ajustes.doseG<=0) {
-    Serial.print(" | FALTA DOSE: d valor");
-    telnetPrint(" | FALTA DOSE: d valor");
-  } else if (!rearmado && !bombaLigada && !aguardandoConfirmacao) {
-    Serial.print(" | AGUARDA UMIDADE >=30% PARA REARMAR");
-    telnetPrint(" | AGUARDA UMIDADE >=30% PARA REARMAR");
-  }
-
-  Serial.printf(" | WiFi: %s | Pendentes: %lu | Arquivos: %s | Perdas: %lu\n",
-    growWifi.load()?"OK":"OFF",static_cast<unsigned long>(growPendentes.load()),
-    growEstadoDisco(),static_cast<unsigned long>(growPerdidos.load()));
-  telnetPrintf(" | WiFi: %s | Pendentes: %lu | Arquivos: %s | Perdas: %lu\n",
-    growWifi.load()?"OK":"OFF",static_cast<unsigned long>(growPendentes.load()),
-    growEstadoDisco(),static_cast<unsigned long>(growPerdidos.load()));
 }
 
 void setup() {
